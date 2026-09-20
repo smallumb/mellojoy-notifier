@@ -1,0 +1,5 @@
+# ローカル実行用。このファイルを .dev.vars にコピーして値を入れる（Gitには含めない）
+LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxxxxxxxxxx
+LINE_USER_ID=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# Slack にも送る場合だけ
+# SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXXX/YYYY/ZZZZ

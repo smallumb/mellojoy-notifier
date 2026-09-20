@@ -1,0 +1,63 @@
+# mellojoy-notifier
+
+メロジョイ公式通販の「新製品」「新バリエーション」「在庫復活」を検知して、
+LINE（と、設定されていれば Slack）に通知する Cloudflare Python Worker。
+
+- サイトに対しては読み取り（`products.json` の GET）だけを行う
+- カート投入・購入などの操作は一切しない
+- 通知には、人間がタップして使う商品ページとカートパーマリンクを載せる
+
+## 仕組み
+
+1. cron で起動する（通常は5分ごと。日本時間 11:55〜12:09 だけ毎分）
+2. `products.json` をページングで全件取得する
+3. 前回のスナップショットとバリエーション単位で差分を取る
+4. 差分があれば LINE / Slack に通知する
+5. 最新のスナップショットを D1 に保存する
+
+初回実行は記録のみで、通知は「監視を始めたよ」の1通だけ。
+全商品が「新製品」として通知されるのを防いでいる。
+
+取得に失敗したときは指数バックオフ（2分→最大30分）で待機し、
+3回連続で失敗した時点で自分宛てに警告を送る。復旧したら復旧通知を送る。
+
+## セットアップ
+
+```sh
+npm install -g wrangler   # または npx wrangler を使う
+
+# D1 データベースを作る（作成後、表示された database_id を wrangler.toml に書く）
+npx wrangler d1 create mellojoy-notifier
+
+# テーブルを作る
+npx wrangler d1 execute mellojoy-notifier --remote --file=schema.sql
+
+# シークレットを登録する
+npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
+npx wrangler secret put LINE_USER_ID
+npx wrangler secret put SLACK_WEBHOOK_URL   # Slack にも送る場合だけ
+
+npx wrangler deploy
+```
+
+## ローカルで試す
+
+`.dev.vars.example` を `.dev.vars` にコピーして値を入れる（`.dev.vars` は Git に含めない）。
+
+```sh
+npx wrangler d1 execute mellojoy-notifier --local --file=schema.sql
+npx wrangler dev --test-scheduled
+# 別のターミナルから cron を手で叩く
+curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
+```
+
+## 環境変数
+
+| 名前 | 必須 | 説明 |
+| --- | --- | --- |
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE に送るなら | LINE Messaging API のチャネルアクセストークン |
+| `LINE_USER_ID` | LINE に送るなら | 送信先のユーザーID（`U` から始まる） |
+| `SLACK_WEBHOOK_URL` | 任意 | 設定されている場合だけ Slack にも送る |
+
+LINE の無料プランは月200通まで。1回のプッシュが1通として数えられるため、
+複数商品はカルーセルにまとめて送っている。
