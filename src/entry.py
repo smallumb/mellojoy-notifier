@@ -24,6 +24,7 @@ MAX_PAGES = 10            # 念のための取得ページ上限
 STATE_KEY = "snapshot"
 
 FAILURE_ALERT_THRESHOLD = 3   # 連続失敗がこの回数に達したら自分宛てに警告
+FAILURE_ALERT_REPEAT = 10     # その後も、この回数ごとに再通知（無音のまま壊れ続けるのを防ぐ）
 BACKOFF_MIN_SEC = 120         # 失敗時の待機（2分から倍々）
 BACKOFF_MAX_SEC = 1800        # 待機の上限（30分）
 
@@ -34,10 +35,13 @@ LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
 LINE_BUBBLES_PER_CAROUSEL = 12    # カルーセル1つに入るカードの上限
 LINE_MESSAGES_PER_REQUEST = 5     # 1回のプッシュで送れるメッセージの上限
 LINE_MAX_CART_BUTTONS = 4         # 1カードに付けるカートボタンの上限
-LINE_IMAGE_WIDTH = 1024           # 画像はShopify CDNで縮小してから表示する
+IMAGE_WIDTH = 1024                # 画像はShopify CDNで縮小してから表示する
 
 # Slack（任意）
-SLACK_PRODUCTS_PER_MESSAGE = 20   # Slackのブロック上限50に収める
+SLACK_BLOCK_LIMIT = 50            # Slackの1メッセージあたりブロック上限
+SLACK_BLOCKS_PER_PRODUCT = 2      # 商品1件につき section + divider
+# 先頭メッセージには見出しが1ブロック入るため、それを引いてから割る
+SLACK_PRODUCTS_PER_MESSAGE = (SLACK_BLOCK_LIMIT - 1) // SLACK_BLOCKS_PER_PRODUCT
 SLACK_SECTION_TEXT_LIMIT = 3000
 
 
@@ -57,28 +61,39 @@ class Default(WorkerEntrypoint):
 
         try:
             raw_products = await fetch_all_products()
+            current = summarize(raw_products)
         except Exception as e:  # noqa: BLE001
+            # summarize も含めて拾う。フィードが壊れていた場合も
+            # バックオフを効かせ、毎分そのまま失敗し続けるのを防ぐ
             await handle_failure(env, state, now, e)
             return
 
-        current = summarize(raw_products)
         previous = state.get("products")
         seen = set(state.get("seen_ids", []))
+        recovered = state.get("failures", 0) >= FAILURE_ALERT_THRESHOLD
 
         # 初回は記録のみ（全商品が「新製品」扱いになるのを防ぐ）
         if previous is None:
-            await save_state(env, build_state(current, seen))
+            await save_state(env, build_state(previous, current, seen))
+            if recovered:
+                await send_text(env, "✅ 取得が復旧しました")
             await send_text(env, f"サイトの監視を始めたよ 👀（{len(current)}件の商品を記録）")
             return
 
         events = diff(previous, current, seen)
+
+        # 通知より先に保存する。通知の送信が例外で落ちても、次回に同じ差分を
+        # 再検出して延々と重複通知するのを防ぐ（LINEの無料枠は月200通）
+        await save_state(env, build_state(previous, current, seen))
+
         if events:
-            await notify(env, events)
+            try:
+                await notify(env, events)
+            except Exception as e:  # noqa: BLE001
+                print(f"通知の送信に失敗しました（状態は保存済み）: {e}")
 
-        if state.get("failures", 0) >= FAILURE_ALERT_THRESHOLD:
+        if recovered:
             await send_text(env, "✅ 取得が復旧しました")
-
-        await save_state(env, build_state(current, seen))
 
 
 # ---- 取得 -------------------------------------------------------------------
@@ -87,6 +102,16 @@ class HttpError(Exception):
     def __init__(self, status, url):
         super().__init__(f"HTTP {status}: {url}")
         self.status = status
+
+
+class EmptyCatalogError(Exception):
+    def __init__(self):
+        super().__init__("products.json が0件を返しました")
+
+
+class TruncatedError(Exception):
+    def __init__(self, count):
+        super().__init__(f"{MAX_PAGES}ページ（{count}件）で取得が打ち切られました")
 
 
 async def fetch_all_products():
@@ -105,6 +130,16 @@ async def fetch_all_products():
         items.extend(batch)
         if len(batch) < PAGE_LIMIT:
             break
+    else:
+        # 上限ページまで一度も短いページが来なかった＝取得しきれていない。
+        # 欠けたまま保存すると、次回それらが「在庫復活」として誤通知される
+        raise TruncatedError(len(items))
+
+    # 商品が0件になることは通常ありえない（ストアが一時的に応答を壊している、
+    # 取得が絞られている等）。空のスナップショットを保存すると、次回に
+    # カタログ全体が「在庫復活」として誤通知されるため、失敗として扱う
+    if not items:
+        raise EmptyCatalogError()
     return items
 
 
@@ -112,6 +147,9 @@ def summarize(raw_products):
     """比較と通知に必要な項目だけを取り出す。"""
     result = {}
     for p in raw_products:
+        # id が欠けた商品が1件混ざっただけで全体が落ちないように読み飛ばす
+        if p.get("id") is None:
+            continue
         variants = [
             {
                 "id": v["id"],
@@ -120,6 +158,7 @@ def summarize(raw_products):
                 "price": v.get("price", ""),
             }
             for v in p.get("variants", [])
+            if v.get("id") is not None
         ]
         images = p.get("images") or []
         result[str(p["id"])] = {
@@ -140,7 +179,8 @@ def diff(previous, current, seen):
     new         : 一度も見たことのない商品が現れた
     new_variant : 既存の商品に新しいバリエーションが追加された
     restock     : バリエーションが 在庫なし→在庫あり になった
-                  （一度消えた商品が在庫ありで再掲載された場合も含む）
+                  （消えた商品は build_state が在庫なしとして残すため、
+                    在庫ありで再掲載された場合もここで拾われる）
     """
     events = []
     for pid, product in current.items():
@@ -157,13 +197,22 @@ def diff(previous, current, seen):
             continue
 
         before_variants = {v["id"]: v for v in before["variants"]}
-        added = {v["id"] for v in product["variants"] if v["id"] not in before_variants}
-        restocked = {
-            v["id"] for v in product["variants"]
-            if v["available"]
-            and v["id"] in before_variants
-            and not before_variants[v["id"]]["available"]
-        }
+        # Shopify はオプションを作り直すとバリエーションIDを振り直すことがある。
+        # IDが変わっただけの同名バリエーションを「新規」と誤検知しないよう、
+        # IDで見つからない場合は名前で照合する
+        before_by_title = {}
+        for v in before["variants"]:
+            before_by_title.setdefault(v["title"], v)
+
+        added = set()
+        restocked = set()
+        for v in product["variants"]:
+            prior = before_variants.get(v["id"]) or before_by_title.get(v["title"])
+            if prior is None:
+                added.add(v["id"])
+            elif v["available"] and not prior["available"]:
+                restocked.add(v["id"])
+
         if added:
             events.append(("new_variant", product, added))
         if restocked:
@@ -187,7 +236,8 @@ def format_price(price):
     try:
         return f"¥{int(float(price)):,}"
     except (TypeError, ValueError):
-        return str(price)
+        # price が無い・数値でない場合。None を "None" と表示しない
+        return "" if price is None else str(price)
 
 
 def product_url(product):
@@ -215,8 +265,14 @@ def summary_text(events):
 
 
 def _secret(env, name):
+    """設定されていれば文字列として返す。
+    ランタイムによっては str ではなく JsProxy で渡ることがあるため、
+    型で弾かずに str() に通してから中身を見る。"""
     value = getattr(env, name, None)
-    return value if isinstance(value, str) and value else None
+    if _is_js_null(value):
+        return None
+    value = str(value)
+    return value if value else None
 
 
 async def notify(env, events):
@@ -237,12 +293,14 @@ async def send_text(env, text):
 
 # ---- 通知（LINE） -------------------------------------------------------------
 
-def line_image_url(src):
+def resized_image_url(src):
     """Shopify CDN の画像を縮小したURLにする（元画像は4000px超で重いため）。"""
     if not src:
         return ""
+    if "width=" in src:   # すでに指定済みならそのまま使う
+        return src
     sep = "&" if "?" in src else "?"
-    return f"{src}{sep}width={LINE_IMAGE_WIDTH}"
+    return f"{src}{sep}width={IMAGE_WIDTH}"
 
 
 def build_line_bubble(kind, product, highlight_ids):
@@ -279,7 +337,7 @@ def build_line_bubble(kind, product, highlight_ids):
         "body": {"type": "box", "layout": "vertical", "contents": body},
         "footer": {"type": "box", "layout": "vertical", "spacing": "sm", "contents": footer},
     }
-    image = line_image_url(product["image"])
+    image = resized_image_url(product["image"])
     if image:
         bubble["hero"] = {"type": "image", "url": image, "size": "full",
                           "aspectRatio": "1:1", "aspectMode": "cover",
@@ -289,8 +347,9 @@ def build_line_bubble(kind, product, highlight_ids):
 
 async def notify_line(env, events):
     """
-    すべての商品をカルーセルにまとめ、できるだけ1回のプッシュで送る。
-    （無料プランは月200通まで。1回のプッシュ＝1通として数えられる）
+    すべての商品をカルーセルにまとめ、できるだけ少ない通数で送る。
+    （無料プランは月200通まで。通数はリクエスト数ではなく
+      メッセージオブジェクト数＝カルーセル1つにつき1通として数えられる）
     """
     summary = summary_text(events)
     bubbles = [build_line_bubble(k, p, ids) for k, p, ids in events]
@@ -345,8 +404,9 @@ def build_slack_blocks(kind, product, highlight_ids):
 
     section = {"type": "section",
                "text": {"type": "mrkdwn", "text": "\n".join(lines)[:SLACK_SECTION_TEXT_LIMIT]}}
-    if product["image"]:
-        section["accessory"] = {"type": "image", "image_url": product["image"],
+    image = resized_image_url(product["image"])
+    if image:
+        section["accessory"] = {"type": "image", "image_url": image,
                                 "alt_text": product["title"][:200]}
     return [section, {"type": "divider"}]
 
@@ -379,11 +439,16 @@ async def handle_failure(env, state, now, error):
     failures = state.get("failures", 0) + 1
     wait = min(BACKOFF_MAX_SEC, BACKOFF_MIN_SEC * 2 ** (failures - 1))
     state["failures"] = failures
-    state["backoff_until"] = now + wait
+    # 取得にかかった時間を待機から差し引かないよう、今の時刻を取り直す
+    state["backoff_until"] = time.time() + wait
     state["last_error"] = str(error)
     print(f"取得失敗（{failures}回目）: {error} → {wait}秒待機")
 
-    if failures == FAILURE_ALERT_THRESHOLD:
+    # 閾値でまず1回、その後も一定間隔で再通知する（無音のまま壊れ続けるのを防ぐ）
+    if failures == FAILURE_ALERT_THRESHOLD or (
+        failures > FAILURE_ALERT_THRESHOLD
+        and (failures - FAILURE_ALERT_THRESHOLD) % FAILURE_ALERT_REPEAT == 0
+    ):
         await send_text(
             env,
             f"⚠️ 監視が止まっています：連続 {failures} 回取得に失敗しました。\n```{str(error)[:500]}```",
@@ -393,10 +458,27 @@ async def handle_failure(env, state, now, error):
 
 # ---- 状態の保存（D1） --------------------------------------------------------
 
-def build_state(current, seen):
+def build_state(previous, current, seen):
+    """
+    次回と比較するためのスナップショットを作る。
+
+    一時的に products.json から消えた商品（在庫切れや編集中の非公開など）は、
+    前回の情報を「在庫なし」として残す。そのまま落とすと、再掲載されたときに
+    「前回の記録が無い＝一度消えた」と見なされ、在庫が変わっていなくても
+    在庫復活として誤通知されてしまうため。
+    """
+    merged = dict(current)
+    for pid, product in (previous or {}).items():
+        if pid in merged:
+            continue
+        merged[pid] = {
+            **product,
+            "available": False,
+            "variants": [{**v, "available": False} for v in product["variants"]],
+        }
     seen = set(seen) | set(current.keys())
     return {
-        "products": current,
+        "products": merged,
         "seen_ids": sorted(seen),
         "failures": 0,
         "backoff_until": 0,
