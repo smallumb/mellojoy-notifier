@@ -1,5 +1,6 @@
 # ローカル実行用。このファイルを .dev.vars にコピーして値を入れる（Gitには含めない）
 LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxxxxxxxxxx
+# 監視開始・失敗・復旧のお知らせを受け取る自分のID（商品通知は友だち全員に届く）
 LINE_USER_ID=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 # Slack にも送る場合だけ
 # SLACK_WEBHOOK_URL=https://hooks.slack.com/services/XXXX/YYYY/ZZZZ

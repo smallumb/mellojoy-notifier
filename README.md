@@ -3,6 +3,9 @@
 メロジョイ公式通販の「新製品」「新バリエーション」「在庫復活」を検知して、
 LINE（と、設定されていれば Slack）に通知する Cloudflare Python Worker。
 
+- 商品の通知は、LINE 公式アカウントの**友だち全員**に一斉配信（Broadcast）する
+- 監視開始・取得失敗・復旧のお知らせは、`LINE_USER_ID`（管理者）だけに送る（Push）
+
 - サイトに対しては読み取り（`products.json` の GET）だけを行う
 - カート投入・購入などの操作は一切しない
 - 通知には、人間がタップして使う商品ページとカートパーマリンクを載せる
@@ -12,14 +15,14 @@ LINE（と、設定されていれば Slack）に通知する Cloudflare Python 
 1. cron で起動する（通常は5分ごと。日本時間 11:55〜12:09 だけ毎分）
 2. `products.json` をページングで全件取得する
 3. 前回のスナップショットとバリエーション単位で差分を取る
-4. 差分があれば LINE / Slack に通知する
+4. 差分があれば LINE の友だち全員 / Slack に通知する
 5. 最新のスナップショットを D1 に保存する
 
 初回実行は記録のみで、通知は「監視を始めたよ」の1通だけ。
 全商品が「新製品」として通知されるのを防いでいる。
 
 取得に失敗したときは指数バックオフ（2分→最大30分）で待機し、
-3回連続で失敗した時点で自分宛てに警告を送る。復旧したら復旧通知を送る。
+3回連続で失敗した時点で管理者（`LINE_USER_ID`）宛てに警告を送る。復旧したら復旧通知を送る。
 
 ## セットアップ
 
@@ -34,7 +37,7 @@ npx wrangler d1 execute mellojoy-notifier --remote --file=schema.sql
 
 # シークレットを登録する
 npx wrangler secret put LINE_CHANNEL_ACCESS_TOKEN
-npx wrangler secret put LINE_USER_ID
+npx wrangler secret put LINE_USER_ID        # お知らせを受け取る自分のID（任意）
 npx wrangler secret put SLACK_WEBHOOK_URL   # Slack にも送る場合だけ
 
 npx wrangler deploy
@@ -56,8 +59,12 @@ curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
 | 名前 | 必須 | 説明 |
 | --- | --- | --- |
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE に送るなら | LINE Messaging API のチャネルアクセストークン |
-| `LINE_USER_ID` | LINE に送るなら | 送信先のユーザーID（`U` から始まる） |
+| `LINE_USER_ID` | 任意 | 監視開始・失敗・復旧のお知らせを受け取る管理者のユーザーID（`U` から始まる）。商品通知の宛先ではない |
 | `SLACK_WEBHOOK_URL` | 任意 | 設定されている場合だけ Slack にも送る |
 
-LINE の無料プランは月200通まで。1回のプッシュが1通として数えられるため、
-複数商品はカルーセルにまとめて送っている。
+商品通知は、公式アカウントを友だち追加している人全員に届く。
+友達に受け取ってもらうには、公式アカウントを友だち追加してもらう。
+
+LINE の無料プランは月200通まで。通数は**受け取った人数分**で数えられる
+（1回の配信を友達5人が受け取れば5通。この場合は月40回ほどで上限になる）。
+通数を抑えるため、複数商品はカルーセルにまとめて1回で送っている。
