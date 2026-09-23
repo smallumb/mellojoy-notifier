@@ -1,5 +1,5 @@
 """
-メロジョイ公式通販の「新製品」「在庫復活」を検知して LINE（と、設定されていれば Slack）に通知する Cloudflare Python Worker
+メロジョイ公式通販の「新製品」「在庫復活」を検知して LINE の友だち全員（と、設定されていれば Slack）に通知する Cloudflare Python Worker
 
 方針:
 - サイトに対しては読み取り（products.json の GET）だけを行う。
@@ -30,7 +30,8 @@ BACKOFF_MAX_SEC = 1800        # 待機の上限（30分）
 MAX_VARIANTS_PER_PRODUCT = 10 # 通知に載せるバリエーション数の上限
 
 # LINE（Messaging API）
-LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"
+LINE_PUSH_URL = "https://api.line.me/v2/bot/message/push"             # 管理者1人宛て（お知らせ用）
+LINE_BROADCAST_URL = "https://api.line.me/v2/bot/message/broadcast"   # 友だち全員宛て（商品通知用）
 LINE_BUBBLES_PER_CAROUSEL = 12    # カルーセル1つに入るカードの上限
 LINE_MESSAGES_PER_REQUEST = 5     # 1回のプッシュで送れるメッセージの上限
 LINE_MAX_CART_BUTTONS = 4         # 1カードに付けるカートボタンの上限
@@ -228,8 +229,11 @@ async def notify(env, events):
 
 
 async def send_text(env, text):
-    """監視開始・失敗・復旧などのお知らせを、設定されている通知先すべてに送る。"""
-    if _secret(env, "LINE_CHANNEL_ACCESS_TOKEN"):
+    """
+    監視開始・失敗・復旧などのお知らせを、設定されている通知先すべてに送る。
+    LINE は友だち全員ではなく、LINE_USER_ID（管理者）だけに送る。
+    """
+    if _secret(env, "LINE_CHANNEL_ACCESS_TOKEN") and _secret(env, "LINE_USER_ID"):
         await push_line(env, [{"type": "text", "text": text[:5000]}])
     if _secret(env, "SLACK_WEBHOOK_URL"):
         await post_slack(env, {"text": text})
@@ -289,8 +293,8 @@ def build_line_bubble(kind, product, highlight_ids):
 
 async def notify_line(env, events):
     """
-    すべての商品をカルーセルにまとめ、できるだけ1回のプッシュで送る。
-    （無料プランは月200通まで。1回のプッシュ＝1通として数えられる）
+    すべての商品をカルーセルにまとめ、公式アカウントの友だち全員に一斉配信する。
+    （無料プランは月200通まで。1回の配信は「受け取った友だちの人数分」の通数として数えられる）
     """
     summary = summary_text(events)
     bubbles = [build_line_bubble(k, p, ids) for k, p, ids in events]
@@ -304,22 +308,40 @@ async def notify_line(env, events):
         for i in range(0, len(bubbles), LINE_BUBBLES_PER_CAROUSEL)
     ]
     for i in range(0, len(carousels), LINE_MESSAGES_PER_REQUEST):
-        await push_line(env, carousels[i:i + LINE_MESSAGES_PER_REQUEST])
+        batch = carousels[i:i + LINE_MESSAGES_PER_REQUEST]
+        if _secret(env, "LINE_ADMIN_ONLY") == "1":
+            # ローカルで試すときは、友だち全員ではなく自分（LINE_USER_ID）だけに送る
+            if _secret(env, "LINE_USER_ID"):
+                await push_line(env, batch)
+            else:
+                print("LINE_ADMIN_ONLY=1 ですが LINE_USER_ID がないため、LINE には送りません")
+        else:
+            await broadcast_line(env, batch)
 
 
 async def push_line(env, messages):
+    """LINE_USER_ID（管理者）1人に送る。"""
+    await _post_line(env, LINE_PUSH_URL, {"to": env.LINE_USER_ID, "messages": messages})
+
+
+async def broadcast_line(env, messages):
+    """公式アカウントの友だち全員に送る。"""
+    await _post_line(env, LINE_BROADCAST_URL, {"messages": messages})
+
+
+async def _post_line(env, url, payload):
     resp = await fetch(
-        LINE_PUSH_URL,
+        url,
         method="POST",
         headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {env.LINE_CHANNEL_ACCESS_TOKEN}",
         },
-        body=json.dumps({"to": env.LINE_USER_ID, "messages": messages}, ensure_ascii=False),
+        body=json.dumps(payload, ensure_ascii=False),
     )
     if resp.status >= 300:
         # 429 は月の上限到達の可能性が高い
-        print(f"LINE への送信に失敗: HTTP {resp.status} {await resp.text()}")
+        print(f"LINE への送信に失敗（{url}）: HTTP {resp.status} {await resp.text()}")
 
 
 # ---- 通知（Slack・任意） -------------------------------------------------------
