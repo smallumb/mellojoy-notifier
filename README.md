@@ -45,14 +45,36 @@ npx wrangler deploy
 
 ## ローカルで試す
 
-`.dev.vars.example` を `.dev.vars` にコピーして値を入れる（`.dev.vars` は Git に含めない）。
+自分の PC で、本物の LINE に届くかを確かめる手順。
+`.dev.vars` の `LINE_ADMIN_ONLY=1` によって、商品通知も友だち全員ではなく自分だけに届く。
 
-```sh
-npx wrangler d1 execute mellojoy-notifier --local --file=schema.sql
-npx wrangler dev --test-scheduled
-# 別のターミナルから cron を手で叩く
-curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
-```
+1. `.dev.vars.example` を `.dev.vars` にコピーし、本物のトークンと自分の `LINE_USER_ID` を入れる
+   （`.dev.vars` は Git に含めない。`LINE_ADMIN_ONLY=1` は消さない）。
+2. ローカルの D1 を作って起動する。
+
+   ```sh
+   npx wrangler d1 execute mellojoy-notifier --local --file=schema.sql
+   npx wrangler dev --test-scheduled
+   ```
+
+3. 別のターミナルから cron を手で叩く。1回目は記録だけで、「サイトの監視を始めたよ」が自分に届く。
+
+   ```sh
+   curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
+   ```
+
+4. 差分を作るため、ローカルのスナップショットから在庫のある商品を1つ消す
+   （「見たことのある商品」には残るため、次の実行で「在庫復活」として通知される）。
+
+   ```sh
+   npx wrangler d1 execute mellojoy-notifier --local --command \
+     "UPDATE state SET value = json_remove(value, '\$.products.\"' || (SELECT j.key FROM state s, json_each(s.value, '\$.products') j WHERE json_extract(j.value, '\$.available') = 1 LIMIT 1) || '\"') WHERE key = 'snapshot'"
+   ```
+
+5. もう一度 3 の curl を叩くと、「🔁 在庫復活」のカルーセルが自分にだけ届く。
+
+本番（`wrangler secret put`）には `LINE_ADMIN_ONLY` を登録しない。
+友だち全員に届くかは、デプロイ後に友達に確認してもらう。
 
 ## 環境変数
 
@@ -61,6 +83,7 @@ curl "http://localhost:8787/__scheduled?cron=*/5+*+*+*+*"
 | `LINE_CHANNEL_ACCESS_TOKEN` | LINE に送るなら | LINE Messaging API のチャネルアクセストークン |
 | `LINE_USER_ID` | 任意 | 監視開始・失敗・復旧のお知らせを受け取る管理者のユーザーID（`U` から始まる）。商品通知の宛先ではない |
 | `SLACK_WEBHOOK_URL` | 任意 | 設定されている場合だけ Slack にも送る |
+| `LINE_ADMIN_ONLY` | ローカルのみ | `1` にすると、商品通知も `LINE_USER_ID` だけに送る。本番には登録しない |
 
 商品通知は、公式アカウントを友だち追加している人全員に届く。
 友達に受け取ってもらうには、公式アカウントを友だち追加してもらう。

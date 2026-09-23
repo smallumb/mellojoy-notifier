@@ -308,7 +308,15 @@ async def notify_line(env, events):
         for i in range(0, len(bubbles), LINE_BUBBLES_PER_CAROUSEL)
     ]
     for i in range(0, len(carousels), LINE_MESSAGES_PER_REQUEST):
-        await broadcast_line(env, carousels[i:i + LINE_MESSAGES_PER_REQUEST])
+        batch = carousels[i:i + LINE_MESSAGES_PER_REQUEST]
+        if _secret(env, "LINE_ADMIN_ONLY") == "1":
+            # ローカルで試すときは、友だち全員ではなく自分（LINE_USER_ID）だけに送る
+            if _secret(env, "LINE_USER_ID"):
+                await push_line(env, batch)
+            else:
+                print("LINE_ADMIN_ONLY=1 ですが LINE_USER_ID がないため、LINE には送りません")
+        else:
+            await broadcast_line(env, batch)
 
 
 async def push_line(env, messages):
