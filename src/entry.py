@@ -27,6 +27,11 @@ FAILURE_ALERT_THRESHOLD = 3   # 連続失敗がこの回数に達したら自分
 BACKOFF_MIN_SEC = 120         # 失敗時の待機（2分から倍々）
 BACKOFF_MAX_SEC = 1800        # 待機の上限（30分）
 
+ERROR_LOG_SIZE = 10           # D1 に残す失敗の詳細の件数（新しい順）
+ERROR_BODY_SNIPPET = 200      # 失敗時に残すレスポンス本文の文字数
+# 429 などの原因を切り分けるために残すレスポンスヘッダー
+ERROR_HEADERS = ["retry-after", "server", "cf-ray", "cf-mitigated", "x-request-id", "content-type"]
+
 MAX_VARIANTS_PER_PRODUCT = 10 # 通知に載せるバリエーション数の上限
 
 # LINE（Messaging API）
@@ -68,7 +73,7 @@ class Default(WorkerEntrypoint):
 
         # 初回は記録のみ（全商品が「新製品」扱いになるのを防ぐ）
         if previous is None:
-            await save_state(env, build_state(current, seen))
+            await save_state(env, build_state(current, seen, state.get("error_log")))
             await send_text(env, f"サイトの監視を始めたよ 👀（{len(current)}件の商品を記録）")
             return
 
@@ -79,15 +84,33 @@ class Default(WorkerEntrypoint):
         if state.get("failures", 0) >= FAILURE_ALERT_THRESHOLD:
             await send_text(env, "✅ 取得が復旧しました")
 
-        await save_state(env, build_state(current, seen))
+        await save_state(env, build_state(current, seen, state.get("error_log")))
 
 
 # ---- 取得 -------------------------------------------------------------------
 
 class HttpError(Exception):
-    def __init__(self, status, url):
+    def __init__(self, status, url, detail=None):
         super().__init__(f"HTTP {status}: {url}")
         self.status = status
+        self.detail = detail or {}
+
+
+async def describe_response(resp):
+    """失敗したレスポンスの、原因の切り分けに使うヘッダーと本文の先頭を取り出す。"""
+    headers = {}
+    for name in ERROR_HEADERS:
+        try:
+            value = resp.headers.get(name)
+        except Exception:  # noqa: BLE001
+            value = None
+        if not _is_js_null(value):
+            headers[name] = str(value)
+    try:
+        body = " ".join((await resp.text()).split())[:ERROR_BODY_SNIPPET]
+    except Exception as e:  # noqa: BLE001
+        body = f"（本文を読めませんでした: {e}）"
+    return {"headers": headers, "body": body}
 
 
 async def fetch_all_products():
@@ -99,7 +122,7 @@ async def fetch_all_products():
             "Accept": "application/json",
         })
         if resp.status != 200:
-            raise HttpError(resp.status, url)
+            raise HttpError(resp.status, url, await describe_response(resp))
 
         data = json.loads(await resp.text())
         batch = data.get("products", [])
@@ -403,7 +426,15 @@ async def handle_failure(env, state, now, error):
     state["failures"] = failures
     state["backoff_until"] = now + wait
     state["last_error"] = str(error)
+    detail = getattr(error, "detail", {})
+    state["error_log"] = ([{
+        "at": datetime.now(timezone.utc).isoformat(),
+        "error": str(error),
+        **detail,
+    }] + state.get("error_log", []))[:ERROR_LOG_SIZE]
     print(f"取得失敗（{failures}回目）: {error} → {wait}秒待機")
+    if detail:
+        print(f"失敗の詳細: {json.dumps(detail, ensure_ascii=False)}")
 
     if failures == FAILURE_ALERT_THRESHOLD:
         await send_text(
@@ -415,13 +446,15 @@ async def handle_failure(env, state, now, error):
 
 # ---- 状態の保存（D1） --------------------------------------------------------
 
-def build_state(current, seen):
+def build_state(current, seen, error_log=None):
     seen = set(seen) | set(current.keys())
     return {
         "products": current,
         "seen_ids": sorted(seen),
         "failures": 0,
         "backoff_until": 0,
+        # 復旧後も、直近の失敗の詳細は後から調べられるように残す
+        "error_log": error_log or [],
     }
 
 

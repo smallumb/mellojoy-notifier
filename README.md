@@ -24,6 +24,14 @@ LINE（と、設定されていれば Slack）に通知する Cloudflare Python 
 取得に失敗したときは指数バックオフ（2分→最大30分）で待機し、
 3回連続で失敗した時点で管理者（`LINE_USER_ID`）宛てに警告を送る。復旧したら復旧通知を送る。
 
+失敗したときのレスポンス（`Retry-After`・`server`・`cf-ray`・`cf-mitigated` などのヘッダーと本文の先頭）は、
+直近10件を D1 の `error_log` に残している（復旧後も消えない）。429 などの原因を調べるときは次で見る。
+
+```sh
+npx wrangler d1 execute mellojoy-notifier --remote --command \
+  "SELECT j.value FROM state s, json_each(s.value, '\$.error_log') j WHERE s.key = 'snapshot'"
+```
+
 ## セットアップ
 
 ```sh
