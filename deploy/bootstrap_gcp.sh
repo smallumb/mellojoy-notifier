@@ -21,7 +21,8 @@ echo "== API を有効化"
 gcloud services enable \
   cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
   artifactregistry.googleapis.com cloudscheduler.googleapis.com firestore.googleapis.com \
-  secretmanager.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com
+  secretmanager.googleapis.com iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com \
+  cloudresourcemanager.googleapis.com
 
 echo "== Firestore（ネイティブモード）"
 if ! gcloud firestore databases describe --database='(default)' >/dev/null 2>&1; then
