@@ -15,7 +15,7 @@ LINE（と、設定されていれば Slack）に通知する。Google Cloud の
 | 役割 | 使うサービス |
 | --- | --- |
 | 実行 | Cloud Run functions（Python 3.12、`asia-northeast1`、未認証アクセス不可） |
-| 定期起動 | Cloud Scheduler（3ジョブ。時刻は日本時間） |
+| 定期起動 | Cloud Scheduler（2ジョブ。時刻は日本時間） |
 | 状態の保存 | Firestore の `state/snapshot` ドキュメント |
 | 秘密情報 | Secret Manager（関数には環境変数として渡す） |
 | デプロイ | GitHub Actions（main へのマージで自動デプロイ。Workload Identity 連携で鍵ファイルなし） |
@@ -25,7 +25,7 @@ LINE（と、設定されていれば Slack）に通知する。Google Cloud の
 
 ## 仕組み
 
-1. Cloud Scheduler が関数を呼ぶ（通常は5分ごと。日本時間 11:55〜12:09 だけ毎分）
+1. Cloud Scheduler が関数を呼ぶ（通常は10分ごと。日本時間 12:00〜12:10 だけ毎分）
 2. `products.json` をページングで全件取得する
 3. 前回のスナップショットとバリエーション単位で差分を取る
 4. 差分があれば LINE の友だち全員 / Slack に通知する
@@ -62,7 +62,7 @@ Firestore のコンソールで `state/snapshot` の `value`（JSON 文字列）
 5. 初回の動作を確認する
 
    ```sh
-   gcloud scheduler jobs run mellojoy-every-5min --location=asia-northeast1
+   gcloud scheduler jobs run mellojoy-every-10min --location=asia-northeast1
    ```
 
    管理者の LINE に「サイトの監視を始めたよ」が届き、Firestore に `state/snapshot` ができていれば完了。
@@ -132,10 +132,10 @@ LINE の無料プランは月200通まで。通数は**受け取った人数分*
 
 ## 費用
 
-月9,300回ほどの実行で、いずれも Google Cloud の無料枠に収まる見込み。
+月4,600回ほどの実行で、いずれも Google Cloud の無料枠に収まる見込み。
 
 - Cloud Run functions：月200万回・40万 GB秒まで無料
-- Cloud Scheduler：請求先アカウントごとに3ジョブまで無料（ちょうど3ジョブ使う）
+- Cloud Scheduler：請求先アカウントごとに3ジョブまで無料（2ジョブ使う）
 - Firestore：1日あたり読み取り5万回・書き込み2万回まで無料
 - Secret Manager：環境変数として渡すので、読み取りは起動時だけ
 - Artifact Registry：古いイメージは自動で消す（新しい2つだけ残す）

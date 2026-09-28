@@ -10,11 +10,10 @@ source ./config.sh
 URL="$(gcloud functions describe "$FUNCTION_NAME" --gen2 --region="$REGION" --format='value(serviceConfig.uri)')"
 
 # ジョブ名 と スケジュール
-# 12:00・12:05 は5分ごとのジョブが担当するため、毎分側からは除いて重複起動を避ける
+# 12:00・12:10 は10分ごとのジョブが担当するため、毎分側からは除いて重複起動を避ける
 JOBS=(
-  "mellojoy-every-5min|*/5 * * * *"        # 通常時：5分ごと
-  "mellojoy-before-noon|55-59 11 * * *"    # 11:55〜11:59：毎分
-  "mellojoy-after-noon|1-4,6-9 12 * * *"   # 12:01〜12:09：毎分
+  "mellojoy-every-10min|*/10 * * * *"   # 通常時：10分ごと
+  "mellojoy-noon|1-9 12 * * *"          # 12:01〜12:09：毎分
 )
 
 for job in "${JOBS[@]}"; do
