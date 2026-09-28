@@ -1,0 +1,38 @@
+name: Deploy to Google Cloud
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "deploy/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+# 同時に2つのデプロイが走らないようにする
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # GCP の初期設定（deploy/bootstrap_gcp.sh）と Variables の登録が済むまではスキップする
+    if: vars.GCP_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # Workload Identity 連携で GCP の一時的な認証情報を得るため
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy function and scheduler jobs
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: bash deploy/deploy.sh
