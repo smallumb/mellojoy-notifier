@@ -1,12 +1,14 @@
 # ローカル用シークレット（LINEトークンなど）。絶対にコミットしない
-.dev.vars
+.env
 
-# wrangler のローカル作業ディレクトリ（D1のローカルDB・キャッシュ）
-.wrangler/
+# ローカルで試したときの状態ファイル
+state.json
 
 # Python
 __pycache__/
 *.py[cod]
+.venv/
+venv/
 
 # macOS
 .DS_Store

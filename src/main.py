@@ -1,5 +1,6 @@
 """
-メロジョイ公式通販の「新製品」「在庫復活」を検知して LINE の友だち全員（と、設定されていれば Slack）に通知する Cloudflare Python Worker
+メロジョイ公式通販の「新製品」「在庫復活」を検知して LINE の友だち全員（と、設定されていれば Slack）に通知する
+Google Cloud Run functions（Cloud Scheduler から定期的に呼び出す）
 
 方針:
 - サイトに対しては読み取り（products.json の GET）だけを行う。
@@ -8,11 +9,13 @@
 """
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from workers import WorkerEntrypoint, fetch
+import functions_framework
+import requests
 
 # ---- 設定 -------------------------------------------------------------------
 
@@ -21,13 +24,17 @@ USER_AGENT = "mellojoy-restock-notifier/1.0 (personal use, read-only)"
 
 PAGE_LIMIT = 250          # products.json の1ページあたり件数（Shopifyの上限）
 MAX_PAGES = 10            # 念のための取得ページ上限
-STATE_KEY = "snapshot"
+HTTP_TIMEOUT_SEC = 20     # 外部への HTTP リクエストのタイムアウト
+
+# 状態の保存先（Firestore の state/snapshot ドキュメント）
+STATE_COLLECTION = "state"
+STATE_DOCUMENT = "snapshot"
 
 FAILURE_ALERT_THRESHOLD = 3   # 連続失敗がこの回数に達したら自分宛てに警告
 BACKOFF_MIN_SEC = 120         # 失敗時の待機（2分から倍々）
 BACKOFF_MAX_SEC = 1800        # 待機の上限（30分）
 
-ERROR_LOG_SIZE = 10           # D1 に残す失敗の詳細の件数（新しい順）
+ERROR_LOG_SIZE = 10           # 状態に残す失敗の詳細の件数（新しい順）
 ERROR_BODY_SNIPPET = 200      # 失敗時に残すレスポンス本文の文字数
 # 429 などの原因を切り分けるために残すレスポンスヘッダー
 ERROR_HEADERS = ["retry-after", "server", "cf-ray", "cf-mitigated", "x-request-id", "content-type"]
@@ -49,42 +56,46 @@ SLACK_SECTION_TEXT_LIMIT = 3000
 
 # ---- エントリーポイント -------------------------------------------------------
 
-class Default(WorkerEntrypoint):
-    async def scheduled(self, controller, env, ctx):
-        # ランタイムのバージョンによっては引数の env が None で渡されるため、
-        # WorkerEntrypoint が保持している self.env を優先して使う
-        env = getattr(self, "env", None) or env
-        now = time.time()
-        state = await load_state(env)
+@functions_framework.http
+def run(request):
+    """Cloud Scheduler から呼ばれる。取得の失敗は状態とログに残して 200 を返す。
+    想定外の例外は 500 になり、Cloud Logging に残る（Scheduler は再試行しない）。"""
+    check()
+    return "ok"
 
-        if now < state.get("backoff_until", 0):
-            print("前回の失敗により待機中のため、今回はスキップします")
-            return
 
-        try:
-            raw_products = await fetch_all_products()
-        except Exception as e:  # noqa: BLE001
-            await handle_failure(env, state, now, e)
-            return
+def check():
+    now = time.time()
+    state = load_state()
 
-        current = summarize(raw_products)
-        previous = state.get("products")
-        seen = set(state.get("seen_ids", []))
+    if now < state.get("backoff_until", 0):
+        print("前回の失敗により待機中のため、今回はスキップします")
+        return
 
-        # 初回は記録のみ（全商品が「新製品」扱いになるのを防ぐ）
-        if previous is None:
-            await save_state(env, build_state(current, seen, state.get("error_log")))
-            await send_text(env, f"サイトの監視を始めたよ 👀（{len(current)}件の商品を記録）")
-            return
+    try:
+        raw_products = fetch_all_products()
+    except Exception as e:  # noqa: BLE001
+        handle_failure(state, now, e)
+        return
 
-        events = diff(previous, current, seen)
-        if events:
-            await notify(env, events)
+    current = summarize(raw_products)
+    previous = state.get("products")
+    seen = set(state.get("seen_ids", []))
 
-        if state.get("failures", 0) >= FAILURE_ALERT_THRESHOLD:
-            await send_text(env, "✅ 取得が復旧しました")
+    # 初回は記録のみ（全商品が「新製品」扱いになるのを防ぐ）
+    if previous is None:
+        save_state(build_state(current, seen, state.get("error_log")))
+        send_text(f"サイトの監視を始めたよ 👀（{len(current)}件の商品を記録）")
+        return
 
-        await save_state(env, build_state(current, seen, state.get("error_log")))
+    events = diff(previous, current, seen)
+    if events:
+        notify(events)
+
+    if state.get("failures", 0) >= FAILURE_ALERT_THRESHOLD:
+        send_text("✅ 取得が復旧しました")
+
+    save_state(build_state(current, seen, state.get("error_log")))
 
 
 # ---- 取得 -------------------------------------------------------------------
@@ -96,35 +107,28 @@ class HttpError(Exception):
         self.detail = detail or {}
 
 
-async def describe_response(resp):
+def describe_response(resp):
     """失敗したレスポンスの、原因の切り分けに使うヘッダーと本文の先頭を取り出す。"""
-    headers = {}
-    for name in ERROR_HEADERS:
-        try:
-            value = resp.headers.get(name)
-        except Exception:  # noqa: BLE001
-            value = None
-        if not _is_js_null(value):
-            headers[name] = str(value)
+    headers = {name: resp.headers[name] for name in ERROR_HEADERS if name in resp.headers}
     try:
-        body = " ".join((await resp.text()).split())[:ERROR_BODY_SNIPPET]
+        body = " ".join(resp.text.split())[:ERROR_BODY_SNIPPET]
     except Exception as e:  # noqa: BLE001
         body = f"（本文を読めませんでした: {e}）"
     return {"headers": headers, "body": body}
 
 
-async def fetch_all_products():
+def fetch_all_products():
     items = []
     for page in range(1, MAX_PAGES + 1):
         url = f"{STORE_URL}/products.json?limit={PAGE_LIMIT}&page={page}"
-        resp = await fetch(url, headers={
+        resp = requests.get(url, timeout=HTTP_TIMEOUT_SEC, headers={
             "User-Agent": USER_AGENT,
             "Accept": "application/json",
         })
-        if resp.status != 200:
-            raise HttpError(resp.status, url, await describe_response(resp))
+        if resp.status_code != 200:
+            raise HttpError(resp.status_code, url, describe_response(resp))
 
-        data = json.loads(await resp.text())
+        data = resp.json()
         batch = data.get("products", [])
         items.extend(batch)
         if len(batch) < PAGE_LIMIT:
@@ -238,28 +242,28 @@ def summary_text(events):
     return "　".join(f"{LABELS[k]} {n}件" for k, n in counts.items())
 
 
-def _secret(env, name):
-    value = getattr(env, name, None)
-    return value if isinstance(value, str) and value else None
+def _secret(name):
+    """環境変数（本番では Secret Manager から渡される）を読む。未設定・空なら None。"""
+    return os.environ.get(name) or None
 
 
-async def notify(env, events):
+def notify(events):
     """設定されている通知先すべてに送る。"""
-    if _secret(env, "LINE_CHANNEL_ACCESS_TOKEN"):
-        await notify_line(env, events)
-    if _secret(env, "SLACK_WEBHOOK_URL"):
-        await notify_slack(env, events)
+    if _secret("LINE_CHANNEL_ACCESS_TOKEN"):
+        notify_line(events)
+    if _secret("SLACK_WEBHOOK_URL"):
+        notify_slack(events)
 
 
-async def send_text(env, text):
+def send_text(text):
     """
     監視開始・失敗・復旧などのお知らせを、設定されている通知先すべてに送る。
     LINE は友だち全員ではなく、LINE_USER_ID（管理者）だけに送る。
     """
-    if _secret(env, "LINE_CHANNEL_ACCESS_TOKEN") and _secret(env, "LINE_USER_ID"):
-        await push_line(env, [{"type": "text", "text": text[:5000]}])
-    if _secret(env, "SLACK_WEBHOOK_URL"):
-        await post_slack(env, {"text": text})
+    if _secret("LINE_CHANNEL_ACCESS_TOKEN") and _secret("LINE_USER_ID"):
+        push_line([{"type": "text", "text": text[:5000]}])
+    if _secret("SLACK_WEBHOOK_URL"):
+        post_slack({"text": text})
 
 
 # ---- 通知（LINE） -------------------------------------------------------------
@@ -314,7 +318,7 @@ def build_line_bubble(kind, product, highlight_ids):
     return bubble
 
 
-async def notify_line(env, events):
+def notify_line(events):
     """
     すべての商品をカルーセルにまとめ、公式アカウントの友だち全員に一斉配信する。
     （無料プランは月200通まで。1回の配信は「受け取った友だちの人数分」の通数として数えられる）
@@ -332,39 +336,36 @@ async def notify_line(env, events):
     ]
     for i in range(0, len(carousels), LINE_MESSAGES_PER_REQUEST):
         batch = carousels[i:i + LINE_MESSAGES_PER_REQUEST]
-        if _secret(env, "LINE_ADMIN_ONLY") == "1":
+        if _secret("LINE_ADMIN_ONLY") == "1":
             # ローカルで試すときは、友だち全員ではなく自分（LINE_USER_ID）だけに送る
-            if _secret(env, "LINE_USER_ID"):
-                await push_line(env, batch)
+            if _secret("LINE_USER_ID"):
+                push_line(batch)
             else:
                 print("LINE_ADMIN_ONLY=1 ですが LINE_USER_ID がないため、LINE には送りません")
         else:
-            await broadcast_line(env, batch)
+            broadcast_line(batch)
 
 
-async def push_line(env, messages):
+def push_line(messages):
     """LINE_USER_ID（管理者）1人に送る。"""
-    await _post_line(env, LINE_PUSH_URL, {"to": env.LINE_USER_ID, "messages": messages})
+    _post_line(LINE_PUSH_URL, {"to": _secret("LINE_USER_ID"), "messages": messages})
 
 
-async def broadcast_line(env, messages):
+def broadcast_line(messages):
     """公式アカウントの友だち全員に送る。"""
-    await _post_line(env, LINE_BROADCAST_URL, {"messages": messages})
+    _post_line(LINE_BROADCAST_URL, {"messages": messages})
 
 
-async def _post_line(env, url, payload):
-    resp = await fetch(
+def _post_line(url, payload):
+    resp = requests.post(
         url,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {env.LINE_CHANNEL_ACCESS_TOKEN}",
-        },
-        body=json.dumps(payload, ensure_ascii=False),
+        json=payload,
+        timeout=HTTP_TIMEOUT_SEC,
+        headers={"Authorization": f"Bearer {_secret('LINE_CHANNEL_ACCESS_TOKEN')}"},
     )
-    if resp.status >= 300:
+    if resp.status_code >= 300:
         # 429 は月の上限到達の可能性が高い
-        print(f"LINE への送信に失敗（{url}）: HTTP {resp.status} {await resp.text()}")
+        print(f"LINE への送信に失敗（{url}）: HTTP {resp.status_code} {resp.text}")
 
 
 # ---- 通知（Slack・任意） -------------------------------------------------------
@@ -396,7 +397,7 @@ def build_slack_blocks(kind, product, highlight_ids):
     return [section, {"type": "divider"}]
 
 
-async def notify_slack(env, events):
+def notify_slack(events):
     summary = summary_text(events)
     for i in range(0, len(events), SLACK_PRODUCTS_PER_MESSAGE):
         blocks = []
@@ -404,23 +405,18 @@ async def notify_slack(env, events):
             blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"*{summary}*"}})
         for kind, product, ids in events[i:i + SLACK_PRODUCTS_PER_MESSAGE]:
             blocks.extend(build_slack_blocks(kind, product, ids))
-        await post_slack(env, {"text": summary, "blocks": blocks})
+        post_slack({"text": summary, "blocks": blocks})
 
 
-async def post_slack(env, payload):
-    resp = await fetch(
-        env.SLACK_WEBHOOK_URL,
-        method="POST",
-        headers={"Content-Type": "application/json"},
-        body=json.dumps(payload, ensure_ascii=False),
-    )
-    if resp.status >= 300:
-        print(f"Slack への送信に失敗: HTTP {resp.status} {await resp.text()}")
+def post_slack(payload):
+    resp = requests.post(_secret("SLACK_WEBHOOK_URL"), json=payload, timeout=HTTP_TIMEOUT_SEC)
+    if resp.status_code >= 300:
+        print(f"Slack への送信に失敗: HTTP {resp.status_code} {resp.text}")
 
 
 # ---- 失敗時の処理 -------------------------------------------------------------
 
-async def handle_failure(env, state, now, error):
+def handle_failure(state, now, error):
     failures = state.get("failures", 0) + 1
     wait = min(BACKOFF_MAX_SEC, BACKOFF_MIN_SEC * 2 ** (failures - 1))
     state["failures"] = failures
@@ -437,14 +433,13 @@ async def handle_failure(env, state, now, error):
         print(f"失敗の詳細: {json.dumps(detail, ensure_ascii=False)}")
 
     if failures == FAILURE_ALERT_THRESHOLD:
-        await send_text(
-            env,
+        send_text(
             f"⚠️ 監視が止まっています：連続 {failures} 回取得に失敗しました。\n```{str(error)[:500]}```",
         )
-    await save_state(env, state)
+    save_state(state)
 
 
-# ---- 状態の保存（D1） --------------------------------------------------------
+# ---- 状態の保存（Firestore） ------------------------------------------------
 
 def build_state(current, seen, error_log=None):
     seen = set(seen) | set(current.keys())
@@ -458,33 +453,43 @@ def build_state(current, seen, error_log=None):
     }
 
 
-def _is_js_null(obj):
-    """JavaScript の null / undefined を判定する。
-    Pyodide では undefined は None に、null は JsNull に変換されるため両方を見る。"""
-    return obj is None or type(obj).__name__ == "JsNull"
+_firestore_client = None
 
 
-def _to_py(obj):
-    return obj.to_py() if hasattr(obj, "to_py") else obj
+def _state_doc():
+    """Firestore の state/snapshot ドキュメント。クライアントは起動中に使い回す。"""
+    global _firestore_client
+    if _firestore_client is None:
+        from google.cloud import firestore  # ローカルで STATE_FILE を使うときは読み込まない
+        _firestore_client = firestore.Client()
+    return _firestore_client.collection(STATE_COLLECTION).document(STATE_DOCUMENT)
 
 
-async def load_state(env):
-    row = await env.DB.prepare(
-        "SELECT value FROM state WHERE key = ?"
-    ).bind(STATE_KEY).first()
-    # 初回はまだ行がないため、D1 は null を返す
-    if _is_js_null(row):
+def load_state():
+    # ローカルで試すときは、Firestore の代わりに JSON ファイルを使う
+    path = os.environ.get("STATE_FILE")
+    if path:
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    snapshot = _state_doc().get()
+    # 初回はまだドキュメントがない
+    if not snapshot.exists:
         return {}
-    row = _to_py(row)
-    return json.loads(row["value"])
+    return json.loads(snapshot.get("value"))
 
 
-async def save_state(env, state):
-    await env.DB.prepare(
-        "INSERT INTO state (key, value, updated_at) VALUES (?, ?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
-    ).bind(
-        STATE_KEY,
-        json.dumps(state, ensure_ascii=False),
-        datetime.now(timezone.utc).isoformat(),
-    ).run()
+def save_state(state):
+    value = json.dumps(state, ensure_ascii=False)
+    path = os.environ.get("STATE_FILE")
+    if path:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(value)
+        return
+
+    _state_doc().set({
+        "value": value,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    })
