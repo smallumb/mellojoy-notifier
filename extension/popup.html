@@ -3,37 +3,97 @@
 <head>
   <meta charset="utf-8">
   <style>
-    body { width: 340px; margin: 0; padding: 12px; font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; color: #222; }
-    h1 { font-size: 14px; margin: 0 0 8px; }
-    h2 { font-size: 12px; margin: 12px 0 4px; color: #666; }
-    label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
-    input[type=number] { width: 64px; }
-    button { margin-top: 8px; width: 100%; padding: 6px; }
-    #status { background: #f4f4f4; border-radius: 6px; padding: 6px 8px; }
-    #log { max-height: 160px; overflow-y: auto; font: 11px/1.4 ui-monospace, Menlo, monospace;
-           white-space: pre-wrap; word-break: break-all; background: #f4f4f4; border-radius: 6px; padding: 6px 8px; margin: 0; }
-    .note { color: #888; font-size: 11px; }
+    :root {
+      --accent: #0b7a5f; --accent-soft: #e1f4ec; --ground: #f3faf7; --card: #fff;
+      --text: #1d2b27; --muted: #4e605a; --line: #e6f2ed; --field: #f7fcfa; --field-line: #cfe6dc;
+      --error: #c2410c; --off: #8a9a94;
+    }
+    body { width: 340px; margin: 0; padding: 16px; box-sizing: border-box; background: var(--ground); color: var(--text);
+           font: 13px/1.5 "Zen Maru Gothic", "Hiragino Maru Gothic ProN", "BIZ UDPGothic", "Yu Gothic UI", sans-serif;
+           display: flex; flex-direction: column; gap: 12px; }
+    header { display: flex; align-items: center; gap: 8px; }
+    .mark { width: 28px; height: 28px; border-radius: 9px; background: var(--accent); display: flex; align-items: center; justify-content: center; }
+    h1 { font-size: 15px; font-weight: 700; margin: 0; }
+    h2 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0; }
+    .card { background: var(--card); border-radius: 16px; box-shadow: 0 1px 2px rgba(11, 122, 95, 0.08); }
+
+    #status { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .status-head { display: flex; align-items: baseline; justify-content: space-between; }
+    #status-label { font-size: 12px; color: var(--muted); }
+    #auto { font-size: 11px; font-weight: 700; color: var(--accent); }
+    #auto.off { color: var(--muted); }
+    #status-main { font-size: 28px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.2; }
+    #status-main.small { font-size: 15px; }
+    #status-main .time { color: var(--accent); }
+    #status-main .suffix { font-size: 13px; font-weight: 500; color: var(--muted); }
+    #last { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted);
+            border-top: 1px solid var(--line); padding-top: 8px; }
+    #last::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); transform: translateY(-1px); }
+    #last[hidden] { display: none; }
+    #last.notfound { --dot: var(--off); }
+    #last.error { --dot: var(--error); }
+    #error { margin: 0; font-size: 12px; color: var(--error); }
+
+    form { padding: 10px 16px 14px; display: flex; flex-direction: column; }
+    form h2 { margin-bottom: 2px; }
+    label { display: flex; justify-content: space-between; align-items: center; height: 40px; border-bottom: 1px solid var(--line); }
+    label:last-of-type { border-bottom: 0; }
+    input[type=checkbox] { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+    input[type=time], input[type=number] { width: 108px; height: 30px; box-sizing: border-box; padding: 0 8px; font: inherit; color: inherit;
+                                           border: 1px solid var(--field-line); border-radius: 8px; background: var(--field); }
+    input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .actions { display: flex; gap: 8px; margin-top: 8px; }
+    button { flex: 1; height: 44px; border-radius: 12px; font: inherit; font-weight: 700; cursor: pointer; }
+    #test { border: 1.5px solid var(--accent); background: var(--card); color: var(--accent); }
+    #save { border: 0; background: var(--accent); color: #fff; }
+    #save:disabled { background: var(--accent-soft); color: var(--accent); cursor: default; }
+    button:hover:enabled { filter: brightness(0.95); }
+    .note { margin: -4px 4px 0; font-size: 11px; color: #5a6b65; }
+
+    .log { display: flex; flex-direction: column; gap: 4px; }
+    .log h2 { margin: 0 4px; }
+    #log { max-height: 160px; overflow-y: auto; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--card); color: #33443f;
+           font: 11px/1.6 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; }
   </style>
 </head>
 <body>
-  <h1>Mellojoy チェックアウトオープナー</h1>
-  <div id="status">読み込み中…</div>
+  <header>
+    <div class="mark">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>
+      </svg>
+    </div>
+    <h1>Mellojoy Checkout Opener</h1>
+  </header>
 
-  <h2>設定（時刻は日本時間）</h2>
-  <form id="settings">
+  <section id="status" class="card" aria-live="polite">
+    <div class="status-head">
+      <span id="status-label">次回の監視</span>
+      <span id="auto"></span>
+    </div>
+    <div id="status-main">読み込み中…</div>
+    <div id="last" hidden></div>
+    <p id="error" hidden></p>
+  </section>
+
+  <form id="settings" class="card">
+    <h2>設定（日本時間）</h2>
     <label>毎日自動で監視する <input type="checkbox" name="enabled"></label>
     <label>開始時刻 <input type="time" name="at" required></label>
     <label>取得の間隔（秒、0.5以上） <input type="number" name="interval" min="0.5" step="0.1" required></label>
     <label>監視を続ける時間（秒） <input type="number" name="durationSec" min="5" max="600" step="1" required></label>
     <label>一度に開くタブの上限 <input type="number" name="maxTabs" min="1" max="20" step="1" required></label>
-    <button type="submit">保存</button>
+    <div class="actions">
+      <button type="button" id="test">テスト</button>
+      <button type="submit" id="save" disabled>保存済み</button>
+    </div>
   </form>
+  <p class="note">テストは商品を1つ「追加された」とみなしてカートを開きます。カートの中身は手で消してください。</p>
 
-  <button id="test">今すぐテスト</button>
-  <div class="note">商品を1つ「追加された」とみなして、カートをタブで開きます。開いたカートの中身は手で消してください。</div>
-
-  <h2>ログ</h2>
-  <pre id="log"></pre>
+  <section class="log">
+    <h2>ログ</h2>
+    <pre id="log"></pre>
+  </section>
 
   <script type="module" src="popup.js"></script>
 </body>
