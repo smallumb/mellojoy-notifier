@@ -1,0 +1,166 @@
+{
+ "previous": {
+  "1": {
+   "title": "既存・変化なし",
+   "handle": "a",
+   "image": "https://cdn/a.jpg",
+   "available": true,
+   "variants": [
+    {
+     "id": 11,
+     "title": "Default Title",
+     "available": true,
+     "price": "1000.00"
+    }
+   ]
+  },
+  "2": {
+   "title": "既存・在庫復活",
+   "handle": "b",
+   "image": "",
+   "available": false,
+   "variants": [
+    {
+     "id": 21,
+     "title": "赤",
+     "available": false,
+     "price": "1500.00"
+    },
+    {
+     "id": 22,
+     "title": "青",
+     "available": false,
+     "price": "1500.00"
+    }
+   ]
+  },
+  "3": {
+   "title": "既存・バリエーション追加",
+   "handle": "c",
+   "image": "",
+   "available": true,
+   "variants": [
+    {
+     "id": 31,
+     "title": "S",
+     "available": true,
+     "price": "900"
+    }
+   ]
+  }
+ },
+ "current": {
+  "1": {
+   "title": "既存・変化なし",
+   "handle": "a",
+   "image": "https://cdn/a.jpg",
+   "available": true,
+   "variants": [
+    {
+     "id": 11,
+     "title": "Default Title",
+     "available": true,
+     "price": "1000.00"
+    }
+   ]
+  },
+  "2": {
+   "title": "既存・在庫復活",
+   "handle": "b",
+   "image": "",
+   "available": true,
+   "variants": [
+    {
+     "id": 21,
+     "title": "赤",
+     "available": true,
+     "price": "1500.00"
+    },
+    {
+     "id": 22,
+     "title": "青",
+     "available": false,
+     "price": "1500.00"
+    }
+   ]
+  },
+  "3": {
+   "title": "既存・バリエーション追加",
+   "handle": "c",
+   "image": "",
+   "available": true,
+   "variants": [
+    {
+     "id": 31,
+     "title": "S",
+     "available": true,
+     "price": "900"
+    },
+    {
+     "id": 32,
+     "title": "M",
+     "available": false,
+     "price": "900"
+    }
+   ]
+  },
+  "4": {
+   "title": "新製品",
+   "handle": "d",
+   "image": "https://cdn/d.jpg",
+   "available": true,
+   "variants": [
+    {
+     "id": 41,
+     "title": "1 * ボックス",
+     "available": true,
+     "price": "2000"
+    }
+   ]
+  },
+  "5": {
+   "title": "一度消えて再掲載",
+   "handle": "e",
+   "image": "",
+   "available": true,
+   "variants": [
+    {
+     "id": 51,
+     "title": "",
+     "available": true,
+     "price": ""
+    }
+   ]
+  }
+ },
+ "events": [
+  [
+   "restock",
+   "既存・在庫復活",
+   [
+    21
+   ]
+  ],
+  [
+   "new_variant",
+   "既存・バリエーション追加",
+   [
+    32
+   ]
+  ],
+  [
+   "new",
+   "新製品",
+   [
+    41
+   ]
+  ],
+  [
+   "restock",
+   "一度消えて再掲載",
+   [
+    51
+   ]
+  ]
+ ]
+}

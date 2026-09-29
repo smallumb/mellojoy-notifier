@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Mellojoy チェックアウトオープナー",
+  "version": "1.0.0",
+  "description": "日本時間 12:00 に追加された商品を見つけて、チェックアウトをタブで開く（購入は自分で行う）",
+  "minimum_chrome_version": "120",
+  "permissions": ["alarms", "storage", "tabs"],
+  "host_permissions": ["https://www.mellojoyjapan.com/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Mellojoy チェックアウトオープナー" }
+}

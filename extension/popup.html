@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 340px; margin: 0; padding: 12px; font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; color: #222; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    h2 { font-size: 12px; margin: 12px 0 4px; color: #666; }
+    label { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+    input[type=number] { width: 64px; }
+    button { margin-top: 8px; width: 100%; padding: 6px; }
+    #status { background: #f4f4f4; border-radius: 6px; padding: 6px 8px; }
+    #log { max-height: 160px; overflow-y: auto; font: 11px/1.4 ui-monospace, Menlo, monospace;
+           white-space: pre-wrap; word-break: break-all; background: #f4f4f4; border-radius: 6px; padding: 6px 8px; margin: 0; }
+    .note { color: #888; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <h1>Mellojoy チェックアウトオープナー</h1>
+  <div id="status">読み込み中…</div>
+
+  <h2>設定（時刻は日本時間）</h2>
+  <form id="settings">
+    <label>毎日自動で監視する <input type="checkbox" name="enabled"></label>
+    <label>開始時刻 <input type="time" name="at" required></label>
+    <label>取得の間隔（秒、3以上） <input type="number" name="interval" min="3" step="1" required></label>
+    <label>監視を続ける時間（分） <input type="number" name="duration" min="1" max="30" step="1" required></label>
+    <label>一度に開くタブの上限 <input type="number" name="maxTabs" min="1" max="20" step="1" required></label>
+    <button type="submit">保存</button>
+  </form>
+
+  <button id="test">今すぐテスト</button>
+  <div class="note">商品を1つ「追加された」とみなして、カートをタブで開きます。開いたカートの中身は手で消してください。</div>
+
+  <h2>ログ</h2>
+  <pre id="log"></pre>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
