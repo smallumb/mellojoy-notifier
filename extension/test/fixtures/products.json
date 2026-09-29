@@ -1,0 +1,26 @@
+{
+  "previous": [
+    {"id": 1, "title": "既存・変化なし", "handle": "a", "images": [{"src": "https://cdn/a.jpg"}],
+     "variants": [{"id": 11, "title": "Default Title", "available": true, "price": "1000.00"}]},
+    {"id": 2, "title": "既存・在庫復活", "handle": "b", "images": [],
+     "variants": [{"id": 21, "title": "赤", "available": false, "price": "1500.00"},
+                  {"id": 22, "title": "青", "available": false, "price": "1500.00"}]},
+    {"id": 3, "title": "既存・バリエーション追加", "handle": "c",
+     "variants": [{"id": 31, "title": "S", "available": true, "price": "900"}]}
+  ],
+  "current": [
+    {"id": 1, "title": "既存・変化なし", "handle": "a", "images": [{"src": "https://cdn/a.jpg"}],
+     "variants": [{"id": 11, "title": "Default Title", "available": true, "price": "1000.00"}]},
+    {"id": 2, "title": "既存・在庫復活", "handle": "b", "images": [],
+     "variants": [{"id": 21, "title": "赤", "available": true, "price": "1500.00"},
+                  {"id": 22, "title": "青", "available": false, "price": "1500.00"}]},
+    {"id": 3, "title": "既存・バリエーション追加", "handle": "c",
+     "variants": [{"id": 31, "title": "S", "available": true, "price": "900"},
+                  {"id": 32, "title": "M", "available": false, "price": "900"}]},
+    {"id": 4, "title": "新製品", "handle": "d", "images": [{"src": "https://cdn/d.jpg"}, {"src": "https://cdn/d2.jpg"}],
+     "variants": [{"id": 41, "title": "1 * ボックス", "available": true, "price": "2000"}]},
+    {"id": 5, "title": "一度消えて再掲載", "handle": "e",
+     "variants": [{"id": 51, "title": "", "available": true}]}
+  ],
+  "seen": ["1", "2", "3", "5"]
+}
