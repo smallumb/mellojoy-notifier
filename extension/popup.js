@@ -7,6 +7,10 @@ const mainEl = document.getElementById("status-main");
 const lastEl = document.getElementById("last");
 const errorEl = document.getElementById("error");
 const logEl = document.getElementById("log");
+const saveEl = document.getElementById("save");
+
+let saved = DEFAULT_SETTINGS;   // いま保存されている設定
+let justSaved = false;          // 保存した直後だけ「保存しました」と出す
 
 const RESULT_TEXT = { found: "開きました", notfound: "見つからず", error: "失敗" };
 
@@ -30,7 +34,7 @@ async function render() {
   const { settings, nextRunAt, lastResult, log = [] } =
     await chrome.storage.local.get(["settings", "nextRunAt", "lastResult", "log"]);
   const { run } = await chrome.storage.session.get("run");
-  const s = { ...DEFAULT_SETTINGS, ...settings };
+  const s = saved = { ...DEFAULT_SETTINGS, ...settings };
 
   autoEl.textContent = s.enabled ? "自動 ON" : "自動 OFF";
   autoEl.classList.toggle("off", !s.enabled);
@@ -66,19 +70,40 @@ async function render() {
     form.maxTabs.value = s.maxTabs;
     form.dataset.loaded = "1";
   }
+  updateSaveButton();
 }
+
+function readForm() {
+  return {
+    enabled: form.enabled.checked,
+    at: form.at.value,
+    interval: Math.max(Number(form.interval.value), 0.5),
+    durationSec: Number(form.durationSec.value),
+    maxTabs: Number(form.maxTabs.value),
+  };
+}
+
+/** 保存されている設定から変わった項目があれば、保存ボタンを押せるようにする。 */
+function updateSaveButton() {
+  const current = readForm();
+  const dirty = Object.keys(current).some((key) => current[key] !== saved[key]);
+  saveEl.disabled = !dirty;
+  saveEl.textContent = dirty ? "保存" : justSaved ? "保存しました" : "保存済み";
+}
+
+form.addEventListener("input", updateSaveButton);
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  await chrome.storage.local.set({
-    settings: {
-      enabled: form.enabled.checked,
-      at: form.at.value,
-      interval: Math.max(Number(form.interval.value), 0.5),
-      durationSec: Number(form.durationSec.value),
-      maxTabs: Number(form.maxTabs.value),
-    },
-  });
+  const settings = readForm();
+  await chrome.storage.local.set({ settings });
+  saved = settings;
+  justSaved = true;
+  updateSaveButton();
+  setTimeout(() => {
+    justSaved = false;
+    updateSaveButton();
+  }, 1500);
 });
 
 document.getElementById("test").addEventListener("click", async () => {

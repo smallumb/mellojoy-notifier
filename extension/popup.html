@@ -20,8 +20,8 @@
     #status { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
     .status-head { display: flex; align-items: baseline; justify-content: space-between; }
     #status-label { font-size: 12px; color: var(--muted); }
-    #auto { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 10px; color: var(--accent); background: var(--accent-soft); }
-    #auto.off { color: var(--muted); background: var(--line); }
+    #auto { font-size: 11px; font-weight: 700; color: var(--accent); }
+    #auto.off { color: var(--muted); }
     #status-main { font-size: 28px; font-weight: 700; letter-spacing: 0.02em; line-height: 1.2; }
     #status-main.small { font-size: 15px; }
     #status-main .time { color: var(--accent); }
@@ -45,7 +45,8 @@
     button { flex: 1; height: 44px; border-radius: 12px; font: inherit; font-weight: 700; cursor: pointer; }
     #test { border: 1.5px solid var(--accent); background: var(--card); color: var(--accent); }
     #save { border: 0; background: var(--accent); color: #fff; }
-    button:hover { filter: brightness(0.95); }
+    #save:disabled { background: var(--accent-soft); color: var(--accent); cursor: default; }
+    button:hover:enabled { filter: brightness(0.95); }
     .note { margin: -4px 4px 0; font-size: 11px; color: #5a6b65; }
 
     .log { display: flex; flex-direction: column; gap: 4px; }
@@ -83,7 +84,7 @@
     <label>一度に開くタブの上限 <input type="number" name="maxTabs" min="1" max="20" step="1" required></label>
     <div class="actions">
       <button type="button" id="test">テスト</button>
-      <button type="submit" id="save">保存</button>
+      <button type="submit" id="save" disabled>保存済み</button>
     </div>
   </form>
   <p class="note">テストは商品を1つ「追加された」とみなしてカートを開きます。カートの中身は手で消してください。</p>
