@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { checkoutTargets, formatJst, nextStart } from "../lib/schedule.js";
+import { checkoutTargets, formatJst, lateBaseline, nextStart } from "../lib/schedule.js";
 
 const MIN = 60 * 1000;
 const DAY = 24 * 60 * MIN;
@@ -35,4 +35,19 @@ test("checkoutTargets: 在庫のあるバリエーションだけ、テスト時
 
 test("formatJst", () => {
   assert.equal(formatJst(jst("2026-09-29T12:00:05")), "12:00:05");
+});
+
+test("lateBaseline: 開始前なら、いま取得した一覧を使う", () => {
+  assert.equal(lateBaseline(jst("2026-09-29T11:59:00"), jst("2026-09-29T12:00:00"), null), undefined);
+});
+
+test("lateBaseline: 開始後なら、開始前に保存した一覧を使う", () => {
+  const snapshot = { at: jst("2026-09-28T12:00:09"), products: {} };
+  assert.equal(lateBaseline(jst("2026-09-29T12:00:03"), jst("2026-09-29T12:00:00"), snapshot), snapshot);
+});
+
+test("lateBaseline: 開始後で、開始後に取った一覧しかなければ null", () => {
+  const snapshot = { at: jst("2026-09-29T12:00:01"), products: {} };
+  assert.equal(lateBaseline(jst("2026-09-29T12:00:03"), jst("2026-09-29T12:00:00"), snapshot), null);
+  assert.equal(lateBaseline(jst("2026-09-29T12:00:03"), jst("2026-09-29T12:00:00"), undefined), null);
 });

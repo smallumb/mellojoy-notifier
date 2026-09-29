@@ -18,6 +18,18 @@ export function nextStart(nowMs, at, durationMs) {
 }
 
 /**
+ * 開始時刻を過ぎてから基準を取ろうとしているとき、代わりに使う商品一覧を返す。
+ * - 開始時刻より前なら undefined（いま取得した一覧を基準にしてよい）
+ * - 過ぎていれば、開始時刻より前に保存した一覧（snapshot = { at, products }）
+ * - そのような一覧がなければ null（開始時刻に追加された商品を見分けられない）
+ * 開始時刻を過ぎてから取った一覧には、追加された商品がもう入っているため基準にできない。
+ */
+export function lateBaseline(nowMs, startMs, snapshot) {
+  if (nowMs < startMs) return undefined;
+  return snapshot && snapshot.at < startMs ? snapshot : null;
+}
+
+/**
  * 開く対象（[種類, 商品, バリエーション]）を、在庫のあるものだけ並べる。
  * 在庫なしで追加されて後から在庫ありになった商品は「在庫復活」として届くため、在庫復活も対象にする。
  */

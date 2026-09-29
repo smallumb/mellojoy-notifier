@@ -15,7 +15,7 @@
 // それでも止められたときは、30秒ごとの「watchdog」アラームで起きて、保存した状態から続きを行う。
 
 import { LABELS, cartUrl, diff, fetchAllProducts, summarize, variantName } from "./lib/shop.js";
-import { DEFAULT_SETTINGS, checkoutTargets, formatJst, nextStart } from "./lib/schedule.js";
+import { DEFAULT_SETTINGS, checkoutTargets, formatJst, lateBaseline, nextStart } from "./lib/schedule.js";
 
 const MIN_INTERVAL_SEC = 0.5;        // 取得間隔の下限（サイトへの負担を抑える）
 const ERROR_INTERVAL_MAX_SEC = 5;    // 取得に失敗したときの待機の上限
@@ -95,10 +95,18 @@ async function schedule() {
 
 // ---- 監視 -------------------------------------------------------------------
 
+// 取得した商品一覧は、起動が遅れた日に基準として使えるよう保存しておく
+async function saveSnapshot(at, products) {
+  await chrome.storage.local.set({ snapshot: { at, products } });
+}
+
 async function fetchBaseline() {
   for (let attempt = 1; attempt <= BASELINE_ATTEMPTS; attempt++) {
     try {
-      return summarize(await fetchAllProducts());
+      const at = Date.now();
+      const products = summarize(await fetchAllProducts());
+      await saveSnapshot(at, products);
+      return products;
     } catch (e) {
       await log(`基準の取得に失敗しました（${attempt}/${BASELINE_ATTEMPTS}）: ${e.message}`);
       if (attempt < BASELINE_ATTEMPTS) await sleep(BASELINE_RETRY_MS);
@@ -115,8 +123,22 @@ async function startRun(start, settings, { demo = false } = {}) {
   await chrome.action.setBadgeText({ text: "ON" });
   await log(`${formatJst(start)} から ${formatJst(end)} まで、${settings.interval} 秒おきに確認します`);
 
-  await log("基準となる商品一覧を取得します");
-  const baseline = await fetchBaseline();
+  let baseline;
+  const { snapshot } = await chrome.storage.local.get("snapshot");
+  const saved = demo ? undefined : lateBaseline(Date.now(), start, snapshot);
+  if (saved === null) {
+    // 開始時刻を過ぎてから起きた（スリープ明けなど）うえ、それ以前の一覧もない
+    await finish({ start, end, demo }, "error",
+      "開始時刻を過ぎてから起動し、それより前の商品一覧もないため、追加された商品を見分けられませんでした");
+    return;
+  }
+  if (saved) {
+    await log(`開始時刻を過ぎているため、${formatDateTime(saved.at)} に取った商品一覧を基準にします`);
+    baseline = saved.products;
+  } else {
+    await log("基準となる商品一覧を取得します");
+    baseline = await fetchBaseline();
+  }
   if (!baseline) {
     await finish({ start, end, demo }, "error", "基準を取得できなかったため終了しました");
     return;
@@ -174,6 +196,7 @@ async function watch() {
         continue;
       }
       interval = run.interval;
+      await saveSnapshot(pollStartedAt, current);
 
       const seen = new Set(run.seen);
       const targets = checkoutTargets(diff(run.baseline, current, seen), { includeSoldOut: run.demo });
@@ -221,6 +244,11 @@ async function openTargets(targets, maxTabs) {
     await log(`${i < maxTabs ? "開きました" : "（タブ上限のため開かない）"}: ${o.label} ${o.url}`);
   }
   return opened;
+}
+
+function formatDateTime(ms) {
+  const d = new Date(ms + 9 * 60 * 60 * 1000);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${formatJst(ms)}`;
 }
 
 function notFoundMessage(polls) {
