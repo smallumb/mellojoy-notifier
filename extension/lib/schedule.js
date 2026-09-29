@@ -1,7 +1,7 @@
 // 監視の時刻計算と、開く対象の選び方。chrome.* に依存しない（node --test で確かめる）。
 
-// 設定の既定値（時刻は日本時間、間隔は秒、監視時間は分）
-export const DEFAULT_SETTINGS = { enabled: true, at: "12:00", interval: 5, duration: 5, maxTabs: 5 };
+// 設定の既定値（時刻は日本時間、間隔と監視時間は秒）
+export const DEFAULT_SETTINGS = { enabled: true, at: "12:00", interval: 0.5, durationSec: 15, maxTabs: 5 };
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;   // 日本時間は夏時間がないので固定
 

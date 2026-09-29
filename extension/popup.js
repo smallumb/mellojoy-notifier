@@ -18,7 +18,7 @@ async function render() {
 
   const lines = [];
   if (run && run.status !== "done") {
-    lines.push(`🔍 ${run.demo ? "テスト" : "監視"}中（${formatJst(run.end).slice(0, 5)} まで）`);
+    lines.push(`🔍 ${run.demo ? "テスト" : "監視"}中（${formatJst(run.end)} まで）`);
   } else if (nextRunAt) {
     lines.push(`次回：${formatDate(nextRunAt)}`);
   } else {
@@ -38,7 +38,7 @@ async function render() {
     form.enabled.checked = s.enabled;
     form.at.value = s.at;
     form.interval.value = s.interval;
-    form.duration.value = s.duration;
+    form.durationSec.value = s.durationSec;
     form.maxTabs.value = s.maxTabs;
     form.dataset.loaded = "1";
   }
@@ -50,8 +50,8 @@ form.addEventListener("submit", async (e) => {
     settings: {
       enabled: form.enabled.checked,
       at: form.at.value,
-      interval: Math.max(Number(form.interval.value), 3),
-      duration: Number(form.duration.value),
+      interval: Math.max(Number(form.interval.value), 0.5),
+      durationSec: Number(form.durationSec.value),
       maxTabs: Number(form.maxTabs.value),
     },
   });

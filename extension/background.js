@@ -17,8 +17,8 @@
 import { LABELS, cartUrl, diff, fetchAllProducts, summarize, variantName } from "./lib/shop.js";
 import { DEFAULT_SETTINGS, checkoutTargets, formatJst, nextStart } from "./lib/schedule.js";
 
-const MIN_INTERVAL_SEC = 3;          // 取得間隔の下限（サイトへの負担を抑える）
-const ERROR_INTERVAL_MAX_SEC = 30;   // 取得に失敗したときの待機の上限
+const MIN_INTERVAL_SEC = 0.5;        // 取得間隔の下限（サイトへの負担を抑える）
+const ERROR_INTERVAL_MAX_SEC = 5;    // 取得に失敗したときの待機の上限
 const BASELINE_LEAD_MS = 60 * 1000;  // 開始時刻の何ミリ秒前に基準を取るか
 const BASELINE_ATTEMPTS = 3;
 const BASELINE_RETRY_MS = 10 * 1000;
@@ -31,6 +31,7 @@ async function getSettings() {
   const { settings } = await chrome.storage.local.get("settings");
   const s = { ...DEFAULT_SETTINGS, ...settings };
   s.interval = Math.max(Number(s.interval) || DEFAULT_SETTINGS.interval, MIN_INTERVAL_SEC);
+  s.durationSec = Number(s.durationSec) || DEFAULT_SETTINGS.durationSec;
   return s;
 }
 
@@ -77,7 +78,7 @@ async function schedule() {
   }
 
   const now = Date.now();
-  const durationMs = settings.duration * 60 * 1000;
+  const durationMs = settings.durationSec * 1000;
   let start = nextStart(now, settings.at, durationMs);
   const { doneStart } = await chrome.storage.local.get("doneStart");
   if (start === doneStart) start += 24 * 60 * 60 * 1000;   // 今日の分はもう終えた
@@ -107,7 +108,7 @@ async function fetchBaseline() {
 }
 
 async function startRun(start, settings, { demo = false } = {}) {
-  const end = start + settings.duration * 60 * 1000;
+  const end = start + settings.durationSec * 1000;
   // 基準を取るあいだに watchdog が起きても、前回の状態と取り違えないよう先に保存する
   await saveRun({ start, end, demo, status: "preparing" });
   await chrome.alarms.create("watchdog", { periodInMinutes: 0.5 });
@@ -160,6 +161,8 @@ async function watch() {
     let polls = run.polls ?? 0;
     if (!polls) await log("監視を始めました");
     while (Date.now() < run.end) {
+      // 間隔は「取得を始めた時刻」から数える（取得にかかった時間のぶん遅れていかないように）
+      const pollStartedAt = Date.now();
       let current;
       try {
         polls += 1;
@@ -184,7 +187,7 @@ async function watch() {
       for (const pid of Object.keys(current)) seen.add(pid);
       run = { ...run, baseline: current, seen: [...seen], polls };
       await saveRun(run);
-      await sleep(interval * 1000);
+      await sleep(pollStartedAt + interval * 1000 - Date.now());
     }
     await finish(run, "notfound", notFoundMessage(polls));
   } finally {
