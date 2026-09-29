@@ -11,6 +11,7 @@ const saveEl = document.getElementById("save");
 
 let saved = DEFAULT_SETTINGS;   // いま保存されている設定
 let justSaved = false;          // 保存した直後だけ「保存しました」と出す
+let justSavedTimer;
 
 const RESULT_TEXT = { found: "開きました", notfound: "見つからず", error: "失敗" };
 
@@ -77,7 +78,7 @@ function readForm() {
   return {
     enabled: form.enabled.checked,
     at: form.at.value,
-    interval: Math.max(Number(form.interval.value), 0.5),
+    interval: Number(form.interval.value),   // 0.5 への引き上げは保存するときに行う（変更の有無は入力どおりに比べる）
     durationSec: Number(form.durationSec.value),
     maxTabs: Number(form.maxTabs.value),
   };
@@ -96,11 +97,13 @@ form.addEventListener("input", updateSaveButton);
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const settings = readForm();
+  settings.interval = Math.max(settings.interval, 0.5);
   await chrome.storage.local.set({ settings });
   saved = settings;
   justSaved = true;
   updateSaveButton();
-  setTimeout(() => {
+  clearTimeout(justSavedTimer);
+  justSavedTimer = setTimeout(() => {
     justSaved = false;
     updateSaveButton();
   }, 1500);

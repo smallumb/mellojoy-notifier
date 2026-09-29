@@ -29,6 +29,7 @@
     #last { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted);
             border-top: 1px solid var(--line); padding-top: 8px; }
     #last::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--dot, var(--accent)); transform: translateY(-1px); }
+    #last[hidden] { display: none; }
     #last.notfound { --dot: var(--off); }
     #last.error { --dot: var(--error); }
     #error { margin: 0; font-size: 12px; color: var(--error); }
