@@ -1,39 +1,63 @@
 import { DEFAULT_SETTINGS, formatJst } from "./lib/schedule.js";
 
 const form = document.getElementById("settings");
-const statusEl = document.getElementById("status");
+const statusLabelEl = document.getElementById("status-label");
+const autoEl = document.getElementById("auto");
+const mainEl = document.getElementById("status-main");
+const lastEl = document.getElementById("last");
+const errorEl = document.getElementById("error");
 const logEl = document.getElementById("log");
 
 const RESULT_TEXT = { found: "開きました", notfound: "見つからず", error: "失敗" };
 
-function formatDate(ms) {
+function formatDay(ms) {
   const d = new Date(ms + 9 * 60 * 60 * 1000);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${formatJst(ms).slice(0, 5)}`;
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+function formatDate(ms) {
+  return `${formatDay(ms)} ${formatJst(ms).slice(0, 5)}`;
+}
+
+function span(className, text) {
+  const el = document.createElement("span");
+  el.className = className;
+  el.textContent = text;
+  return el;
 }
 
 async function render() {
   const { settings, nextRunAt, lastResult, log = [] } =
     await chrome.storage.local.get(["settings", "nextRunAt", "lastResult", "log"]);
   const { run } = await chrome.storage.session.get("run");
+  const s = { ...DEFAULT_SETTINGS, ...settings };
 
-  const lines = [];
+  autoEl.textContent = s.enabled ? "自動 ON" : "自動 OFF";
+  autoEl.classList.toggle("off", !s.enabled);
+
+  mainEl.classList.remove("small");
   if (run && run.status !== "done") {
-    lines.push(`🔍 ${run.demo ? "テスト" : "監視"}中（${formatJst(run.end)} まで）`);
+    statusLabelEl.textContent = run.demo ? "テスト中" : "監視中";
+    mainEl.replaceChildren(span("time", formatJst(run.end)), " ", span("suffix", "まで"));
   } else if (nextRunAt) {
-    lines.push(`次回：${formatDate(nextRunAt)}`);
+    statusLabelEl.textContent = "次回の監視";
+    mainEl.replaceChildren(`${formatDay(nextRunAt)} `, span("time", formatJst(nextRunAt).slice(0, 5)));
   } else {
-    lines.push("自動の監視はオフです");
+    statusLabelEl.textContent = "次回の監視";
+    mainEl.textContent = "自動の監視はオフです";
+    mainEl.classList.add("small");
   }
+
+  lastEl.hidden = !lastResult;
   if (lastResult) {
-    lines.push(`前回（${lastResult.demo ? "テスト・" : ""}${formatDate(lastResult.at)}）：` +
-      `${RESULT_TEXT[lastResult.status] ?? lastResult.status}　${lastResult.message}`);
+    lastEl.className = lastResult.status;
+    lastEl.textContent = `前回（${lastResult.demo ? "テスト・" : ""}${formatDate(lastResult.at)}）：` +
+      `${RESULT_TEXT[lastResult.status] ?? lastResult.status}　${lastResult.message}`;
   }
-  statusEl.textContent = lines.join("\n");
-  statusEl.style.whiteSpace = "pre-line";
+
   logEl.textContent = log.join("\n") || "（まだありません）";
   logEl.scrollTop = logEl.scrollHeight;
 
-  const s = { ...DEFAULT_SETTINGS, ...settings };
   if (!form.dataset.loaded) {
     form.enabled.checked = s.enabled;
     form.at.value = s.at;
@@ -59,7 +83,8 @@ form.addEventListener("submit", async (e) => {
 
 document.getElementById("test").addEventListener("click", async () => {
   const res = await chrome.runtime.sendMessage({ type: "test" });
-  if (!res?.ok) statusEl.textContent = res?.error ?? "テストを始められませんでした";
+  errorEl.hidden = !!res?.ok;
+  errorEl.textContent = res?.ok ? "" : res?.error ?? "テストを始められませんでした";
 });
 
 chrome.storage.onChanged.addListener(() => render());
