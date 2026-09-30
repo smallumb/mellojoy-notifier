@@ -1,10 +1,16 @@
 // 商品一覧の取得・要約・差分検出。
-// src/main.py の fetch_all_products / summarize / diff / cart_url / variant_name と同じ振る舞いに揃える
+// 取得だけは Storefront API（GraphQL）で行う（main.py は products.json）。products.json は Shopify の
+// ページキャッシュから返り、新商品が画面より数十秒遅れて出てくることがあるため。
+// 取得結果は products.json と同じ形に直して返すので、summarize 以降は
+// src/main.py の summarize / diff / cart_url / variant_name と同じ振る舞いに揃える
 // （片方を直したら、もう片方も直す）。
 
 export const STORE_URL = "https://www.mellojoyjapan.com";
 
-const PAGE_LIMIT = 250;          // products.json の1ページあたり件数（Shopifyの上限）
+const STOREFRONT_API_VERSION = "2026-07";
+const STOREFRONT_URL = `${STORE_URL}/api/${STOREFRONT_API_VERSION}/graphql.json`;
+const PAGE_LIMIT = 25;           // 1ページあたりの商品数（重さをトークンなしの上限 1,000 より十分小さく保つ。実測で1商品あたり約23）
+const VARIANT_LIMIT = 10;        // 1商品あたりに取るバリエーション数（今の商品はどれも1つ。超えたら GraphqlError）
 const MAX_PAGES = 10;            // 念のための取得ページ上限
 const HTTP_TIMEOUT_MS = 20000;   // 1回の取得のタイムアウト
 
@@ -24,22 +30,72 @@ export class HttpError extends Error {
   }
 }
 
+export class GraphqlError extends Error {}
+
+const PRODUCTS_QUERY = `query ($cursor: String) {
+  products(first: ${PAGE_LIMIT}, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id title handle
+      featuredImage { url }
+      variants(first: ${VARIANT_LIMIT}) {
+        pageInfo { hasNextPage }
+        nodes { id title availableForSale price { amount } }
+      }
+    }
+  }
+}`;
+
+/** "gid://shopify/Product/123" → 123（products.json と同じ数値の ID にする） */
+function numericId(gid) {
+  return Number(gid.slice(gid.lastIndexOf("/") + 1));
+}
+
+/** Storefront API の商品を、products.json の商品と同じ形に直す。 */
+export function toRawProduct(node) {
+  if (node.variants.pageInfo.hasNextPage) {
+    throw new GraphqlError(`バリエーションが ${VARIANT_LIMIT} 件を超える商品があります: ${node.title}`);
+  }
+  return {
+    id: numericId(node.id),
+    title: node.title,
+    handle: node.handle,
+    images: node.featuredImage ? [{ src: node.featuredImage.url }] : [],
+    variants: node.variants.nodes.map((v) => ({
+      id: numericId(v.id),
+      title: v.title,
+      available: v.availableForSale,
+      price: v.price?.amount ?? "",
+    })),
+  };
+}
+
 export async function fetchAllProducts(fetchImpl = fetch) {
   const items = [];
+  let cursor = null;
   for (let page = 1; page <= MAX_PAGES; page++) {
-    const url = `${STORE_URL}/products.json?limit=${PAGE_LIMIT}&page=${page}`;
     // ブラウザの Cookie と User-Agent のまま送る（ボット対策に止められにくくするため）
-    const resp = await fetchImpl(url, {
+    const resp = await fetchImpl(STOREFRONT_URL, {
+      method: "POST",
       credentials: "include",
       cache: "no-store",
-      headers: { Accept: "application/json" },
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ query: PRODUCTS_QUERY, variables: { cursor } }),
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
-    if (resp.status !== 200) throw new HttpError(resp.status, url);
+    if (resp.status !== 200) throw new HttpError(resp.status, STOREFRONT_URL);
 
-    const batch = (await resp.json()).products ?? [];
-    items.push(...batch);
-    if (batch.length < PAGE_LIMIT) break;
+    const body = await resp.json();
+    if (body.errors?.length) {
+      const [e] = body.errors;
+      throw new GraphqlError(`GraphQL: ${e.message}${e.extensions?.code ? ` (${e.extensions.code})` : ""}`);
+    }
+    const products = body.data?.products;
+    if (!products) throw new GraphqlError("GraphQL: 商品一覧が返ってきませんでした");
+
+    items.push(...products.nodes.map(toRawProduct));
+    if (!products.pageInfo.hasNextPage) break;
+    cursor = products.pageInfo.endCursor;
   }
   return items;
 }
