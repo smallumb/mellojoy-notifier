@@ -105,6 +105,11 @@ export function cartUrl(variant) {
   return `${STORE_URL}/cart/${variant.id}:1`;
 }
 
+/** 複数のバリエーションを1個ずつ入れた1つのチェックアウトの URL（拡張だけで使う。main.py にはない）。 */
+export function cartUrlFor(variants) {
+  return `${STORE_URL}/cart/${variants.map((v) => `${v.id}:1`).join(",")}`;
+}
+
 export function variantName(variant) {
   return PLAIN_VARIANT_TITLES.has(variant.title) ? "" : variant.title;
 }
