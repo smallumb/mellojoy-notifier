@@ -9,7 +9,7 @@ export const STORE_URL = "https://www.mellojoyjapan.com";
 
 const STOREFRONT_API_VERSION = "2026-07";
 const STOREFRONT_URL = `${STORE_URL}/api/${STOREFRONT_API_VERSION}/graphql.json`;
-const PAGE_LIMIT = 250;          // 1ページあたりの商品数（Shopifyの上限）
+const PAGE_LIMIT = 25;           // 1ページあたりの商品数（重さをトークンなしの上限 1,000 より十分小さく保つ。実測で1商品あたり約23）
 const VARIANT_LIMIT = 100;       // 1商品あたりに取るバリエーション数
 const MAX_PAGES = 10;            // 念のための取得ページ上限
 const HTTP_TIMEOUT_MS = 20000;   // 1回の取得のタイムアウト
