@@ -68,7 +68,7 @@ async function render() {
     form.at.value = s.at;
     form.interval.value = s.interval;
     form.durationSec.value = s.durationSec;
-    form.maxTabs.value = s.maxTabs;
+    form.itemsPerTab.value = s.itemsPerTab;
     form.dataset.loaded = "1";
   }
   updateSaveButton();
@@ -80,7 +80,7 @@ function readForm() {
     at: form.at.value,
     interval: Number(form.interval.value),   // 0.5 への引き上げは保存するときに行う（変更の有無は入力どおりに比べる）
     durationSec: Number(form.durationSec.value),
-    maxTabs: Number(form.maxTabs.value),
+    itemsPerTab: Number(form.itemsPerTab.value),
   };
 }
 

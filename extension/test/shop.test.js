@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { cartUrl, diff, fetchAllProducts, HttpError, summarize, variantName } from "../lib/shop.js";
+import { cartUrl, cartUrlFor, diff, fetchAllProducts, HttpError, summarize, variantName } from "../lib/shop.js";
 
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/products.json", import.meta.url)));
 // src/main.py の summarize / diff に同じ入力を与えた結果（Python 側を変えたら作り直す）
@@ -49,4 +49,10 @@ test("fetchAllProducts は250件ちょうどなら次のページも取る", asy
 
 test("fetchAllProducts は 200 以外で HttpError を投げる", async () => {
   await assert.rejects(fetchAllProducts(async () => ({ status: 429 })), (e) => e instanceof HttpError && e.status === 429);
+});
+
+test("cartUrlFor: 1件なら cartUrl と同じ、複数ならカンマでつなぐ", () => {
+  assert.equal(cartUrlFor([{ id: 11 }]), cartUrl({ id: 11 }));
+  assert.equal(cartUrlFor([{ id: 11 }, { id: 22 }, { id: 33 }]),
+    "https://www.mellojoyjapan.com/cart/11:1,22:1,33:1");
 });

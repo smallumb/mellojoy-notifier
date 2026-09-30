@@ -9,13 +9,14 @@
 // 流れ:
 // 1. 開始時刻の1分前に「baseline」アラームで起き、その時点の商品を基準として覚える
 // 2. 開始時刻から監視時間のあいだ、数秒おきに取得して基準と比べる
-// 3. 在庫のある新製品・新バリエーション・在庫復活が見つかったら、カートパーマリンクを開いて終わる
+// 3. 在庫のある新製品・新バリエーション・在庫復活が見つかったら、商品ごとに1個ずつ（既定で最大3商品）を
+//    1つのカートパーマリンクにまとめ、タブを1つだけ開いて終わる（1回の確定で1つの注文になる）
 //
 // サービスワーカーは30秒ほど何もしないと止められるため、待つあいだも拡張の API を呼び続ける。
 // それでも止められたときは、30秒ごとの「watchdog」アラームで起きて、保存した状態から続きを行う。
 
-import { LABELS, cartUrl, diff, fetchAllProducts, summarize, variantName } from "./lib/shop.js";
-import { DEFAULT_SETTINGS, checkoutTargets, formatJst, lateBaseline, nextStart } from "./lib/schedule.js";
+import { LABELS, cartUrl, cartUrlFor, diff, fetchAllProducts, summarize, variantName } from "./lib/shop.js";
+import { DEFAULT_SETTINGS, checkoutTargets, formatJst, lateBaseline, nextStart, pickBundle } from "./lib/schedule.js";
 
 const MIN_INTERVAL_SEC = 0.5;        // 取得間隔の下限（サイトへの負担を抑える）
 const ERROR_INTERVAL_MAX_SEC = 5;    // 取得に失敗したときの待機の上限
@@ -32,6 +33,7 @@ async function getSettings() {
   const s = { ...DEFAULT_SETTINGS, ...settings };
   s.interval = Math.max(Number(s.interval) || DEFAULT_SETTINGS.interval, MIN_INTERVAL_SEC);
   s.durationSec = Number(s.durationSec) || DEFAULT_SETTINGS.durationSec;
+  s.itemsPerTab = Math.max(Math.floor(Number(s.itemsPerTab)) || DEFAULT_SETTINGS.itemsPerTab, 1);
   return s;
 }
 
@@ -161,7 +163,7 @@ async function startRun(start, settings, { demo = false } = {}) {
   await saveRun({
     start, end, demo,
     interval: settings.interval,
-    maxTabs: settings.maxTabs,
+    itemsPerTab: settings.itemsPerTab,
     baseline,
     seen: Object.keys(baseline),
     status: "watching",
@@ -201,8 +203,8 @@ async function watch() {
       const seen = new Set(run.seen);
       const targets = checkoutTargets(diff(run.baseline, current, seen), { includeSoldOut: run.demo });
       if (targets.length) {
-        const opened = await openTargets(targets, run.maxTabs);
-        await finish(run, "found", `${opened.length} 件を開きました`, opened);
+        const opened = await openTargets(targets, run.itemsPerTab ?? DEFAULT_SETTINGS.itemsPerTab);
+        await finish(run, "found", foundMessage(opened), opened);
         return;
       }
 
@@ -218,12 +220,15 @@ async function watch() {
   }
 }
 
-async function openTargets(targets, maxTabs) {
-  const opened = targets.map(([kind, product, v]) => {
-    const name = variantName(v);
-    return { label: `${LABELS[kind]}　${product.title}${name ? `（${name}）` : ""}`, url: cartUrl(v) };
-  });
-  const urls = opened.slice(0, maxTabs).map((o) => o.url);
+function targetLabel([kind, product, v]) {
+  const name = variantName(v);
+  return `${LABELS[kind]}　${product.title}${name ? `（${name}）` : ""}`;
+}
+
+// 選んだ商品を1つのチェックアウトにまとめ、タブを1つだけ開く
+async function openTargets(targets, itemsPerTab) {
+  const { picked, skipped } = pickBundle(targets, itemsPerTab);
+  const url = cartUrlFor(picked.map(([, , v]) => v));
 
   let win = null;
   try {
@@ -232,18 +237,27 @@ async function openTargets(targets, maxTabs) {
     // ウィンドウが1つも開いていない
   }
   if (win) {
-    const tabs = await Promise.all(
-      urls.map((url, i) => chrome.tabs.create({ windowId: win.id, url, active: i === 0 })),
-    );
-    await chrome.windows.update(tabs[0].windowId, { focused: true });
+    const tab = await chrome.tabs.create({ windowId: win.id, url, active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
   } else {
-    await chrome.windows.create({ url: urls, focused: true });
+    await chrome.windows.create({ url, focused: true });
   }
 
-  for (const [i, o] of opened.entries()) {
-    await log(`${i < maxTabs ? "開きました" : "（タブ上限のため開かない）"}: ${o.label} ${o.url}`);
+  const opened = [
+    ...picked.map((t) => ({ label: targetLabel(t), url: cartUrl(t[2]), bundled: true })),
+    ...skipped.map((t) => ({ label: targetLabel(t), url: cartUrl(t[2]), bundled: false })),
+  ];
+  for (const o of opened) {
+    await log(o.bundled ? `まとめて開きました: ${o.label}` : `（1タブの上限のため入れていない）: ${o.label} ${o.url}`);
   }
+  await log(`開いた URL: ${url}`);
   return opened;
+}
+
+function foundMessage(opened) {
+  const bundled = opened.filter((o) => o.bundled).length;
+  const rest = opened.length - bundled;
+  return `${bundled} 商品を1つのタブにまとめて開きました${rest ? `（ほか ${rest} 商品はログを参照）` : ""}`;
 }
 
 function formatDateTime(ms) {
